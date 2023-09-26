@@ -1,5 +1,6 @@
 import pymongo
 import os
+# from crawling.util.JsonConfigFileManager import  JsonConfigFileManager
 from util.JsonConfigFileManager import JsonConfigFileManager
 from pathlib import Path
 
@@ -35,6 +36,13 @@ class MongodbConnection:
         coll = self.db.get_collection(collection)
         results = coll.find(filter=filter, projection=projection, skip=skip, limit=limit, sort=sort, return_key=return_key)
         return results
+
+    def find_all(self, collection):
+        coll = self.db.get_collection(collection)
+        result = coll.find({})
+        documents = [document for document in result]
+        return documents
+
 
     def find_distinct(self, collection=None, key=None, projection=None):
         '''

@@ -1,3 +1,4 @@
+import logging
 import math
 import random
 import time
@@ -87,7 +88,8 @@ class HidocCrawling():
 
                 answer_list.append(answer_dict)
             except AttributeError as e:
+                logging.info(f'{viewId} get an error : {e}')
                 pass
 
 
-        return question, answer_list
+        return question, answer_list, viewId
