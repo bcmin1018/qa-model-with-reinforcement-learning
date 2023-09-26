@@ -16,7 +16,7 @@ if __name__ == '__main__':
     totalPage = crawler.getPageNum(code)
     logging.info(f'the total page of {code} is {totalPage}.')
 
-    for page in range(1494, totalPage):
+    for page in range(1239, totalPage+1):
         viewIds = crawler.getViewIds(code, page)
 
         #멀티프로세스
@@ -41,4 +41,5 @@ if __name__ == '__main__':
 
         logging.info(f'current {page} page crawling stop')
         mongo.insert_many('doctor-qa-with-rl', data)
+    mongo.close()
 
