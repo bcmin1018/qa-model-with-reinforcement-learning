@@ -1,8 +1,10 @@
 import pandas as pd
 from crawling.database.Mongodb_connect import MongodbConnection
 
+# 몽고 디비에 저장된 데이터를 데이터 프레임으로 변환
+
 codes = ['PF000', 'PD000', 'PE000', 'PMG00', 'PMP00', 'PMI00', 'PMA00', 'PME00', 'PMC00', 'PMN00', 'PMR00', 'PMO00', 'PA000', 'PO000', 'PB000', 'PGI00', 'PC000', 'PG000', 'PS000', 'PH000', 'PV000', 'PU000', 'PY000', 'PL000', 'PN000', 'PR000', 'PP000', 'PJ000', 'PT000', 'PX000', 'PK000', 'PQL00', 'PQ000']
-save_dir = "C:\\funnywork\\pycharm\\pythonProject\\Doctor-QA-with-RL\\preprocessing\\data"
+save_dir = "/Users/byeongcheolmin/PycharmProjects/Doctor-QA-with-RL/preprocessing/data/"
 
 if __name__ == '__main__':
     mongo = MongodbConnection()
@@ -24,4 +26,4 @@ if __name__ == '__main__':
             rows.append(rowdict)
 
     df = pd.DataFrame(rows)
-    df.to_csv(save_dir + "\\" + "all.csv", sep='\t', index=False)
+    df.to_csv(save_dir + "original.csv", sep='\t', index=False)
