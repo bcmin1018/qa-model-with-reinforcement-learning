@@ -1,11 +1,19 @@
 import re
 import logging
-
+import numpy as np
 def clean_text(text):
     try:
         # 안녕하세요 누구누구 입니다 제거
         pattern = '(안녕하세요).+?(입니다.)'
         text = re.sub(pattern=pattern, repl=' ', string=text)
+
+        # 삭제된 질문 제거
+        pattern = re.compile(r'본 게시물은 질문자 본인의 요청으로 삭제되었습니다.')
+        text = re.sub(pattern, "", text)
+
+        # 감사합니다 제거
+        pattern = r"감사합니다\.$|감사합니다$"
+        text = re.sub(pattern, "", text)
 
         # 이메일 제거
         pattern = '([a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+)'
@@ -46,6 +54,9 @@ def clean_text(text):
 
         # 양 끝 공백 제거
         text = text.strip()
+
+
+
 
     except TypeError as e:
         logging.info(f'error occurred : {text} , {e}')
