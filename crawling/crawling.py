@@ -16,11 +16,11 @@ if __name__ == '__main__':
     totalPage = crawler.getPageNum(code)
     logging.info(f'the total page of {code} is {totalPage}.')
 
-    for page in range(1636, totalPage+1):
+    for page in range(1, totalPage+1):
         viewIds = crawler.getViewIds(code, page)
 
         #멀티프로세스
-        pool = ThreadPool(4)
+        pool = ThreadPool(6)
         logging.info(f'current {page} page crawling start')
         results = pool.map(crawler.getQatext, viewIds)
         pool.close()
