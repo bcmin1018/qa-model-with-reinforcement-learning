@@ -196,7 +196,7 @@ def train(args):
         # tokenizer = fn_tokenizer(args)
         model = AutoModelForCausalLM.from_pretrained(args.model_name)
 
-    print(f'######## model train')
+    print(f'######## model train set')
     training_args = TrainingArguments(
         output_dir=args.output_dir,
         learning_rate=args.learning_rate,
@@ -206,18 +206,19 @@ def train(args):
         per_device_train_batch_size=args.per_device_train_batch_size,
         per_device_eval_batch_size=args.per_device_eval_batch_size,
         logging_dir=args.log_dir,  # directory for storing logs
-        logging_steps=args.logging_steps,
+        logging_steps=args.logging_steps, # same as eval_steps
         save_steps=args.save_steps,
         weight_decay=args.weight_decay,
         max_grad_norm=args.max_grad_norm,
         warmup_ratio=args.warmup_ratio,
-        prediction_loss_only=True,
+        # prediction_loss_only=True,
         save_strategy='steps',
         evaluation_strategy='steps',
         lr_scheduler_type=args.lr_scheduler_type,
         seed=args.seed
     )
 
+    print(f'######## set SFTTrainer')
     trainer = SFTTrainer(
         model=model,
         args=training_args,
@@ -226,9 +227,11 @@ def train(args):
         peft_config=lora_config,
         formatting_func=formatting_prompts_func,
         compute_metrics=compute_metrics,
-        packing=True,
+        max_seq_length=1024,
+        packing=False
     )
 
+    print(f'######## model train start')
     trainer.train()
     # trainer.save_model()
 

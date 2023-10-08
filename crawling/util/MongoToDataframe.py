@@ -8,13 +8,14 @@ save_dir = "../data/"
 
 if __name__ == '__main__':
     mongo = MongodbConnection()
-    # results = mongo.find_all(collection='doctor-qa-with-rl')
-    results = mongo.find(collection='doctor-qa-with-rl', filter={"code":"PA000"})
+    results = mongo.find_all(collection='doctor-qa-with-rl')
+    # results = mongo.find(collection='doctor-qa-with-rl', filter={"code":"PA000"})
     rows = []
     for result in results:
         for answer in result['answer']:
             rowdict = {}
             rowdict['id'] = result['_id']
+            rowdict['code'] = result['code']
             rowdict['question'] = result['question']
             rowdict['answer'] = answer['answer']
             rowdict['hiddenAnswerName'] = answer['hiddenAnswerName']
