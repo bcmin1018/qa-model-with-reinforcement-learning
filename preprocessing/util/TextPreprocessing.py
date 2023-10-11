@@ -50,7 +50,7 @@ def clean_text(text):
 
         # 연속된 특수 문자 한개로 만들기
         pattern = r'([^\w\s])\1+'
-        text = re.sub(pattern=pattern, repl=r'', string=text)
+        text = re.sub(pattern=pattern, repl=r'\1', string=text)
 
         # 양 끝 공백 제거
         text = text.strip()

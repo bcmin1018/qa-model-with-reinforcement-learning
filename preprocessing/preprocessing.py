@@ -6,15 +6,16 @@ codes = ['PF000', 'PD000', 'PE000', 'PMG00', 'PMP00', 'PMI00', 'PMA00', 'PME00',
 
 def split_dataframe(df, ratios):
     # 비율 합이 1인지 확인
-    if sum(ratios) != 1:
-        raise ValueError("비율의 합은 1이어야 합니다.")
+    # if sum(ratios)!= 1:
+    #     raise ValueError("비율의 합은 1이어야 합니다.")
 
     # 데이터프레임을 세 가지 부분으로 나눔
     start_idx = 0
-    file_name = ["SFT", "RM", "PPO"]
+    file_name = ["SFT", "RM", "PPO", "EVAL"]
     for i, ratio in enumerate(ratios):
         end_idx = start_idx + int(len(df) * ratio)
         tmp_df = df.iloc[start_idx:end_idx]
+        print(f' tmp 데이터 길이 : {len(tmp_df)}')
         tmp_df.to_csv(f'../RL/data/original/{file_name[i]}.csv', index=False)
         start_idx = end_idx
 
@@ -55,7 +56,7 @@ if __name__ == '__main__':
     print(f'길이 제거 후 데이터 : {len(lengthDf)}')
 
     # SFT, RM, PPO data ratio
-    ratios = [0.4, 0.3, 0.3]
+    ratios = [0.3, 0.3, 0.3, 0.1]
     split_dataframe(lengthDf, ratios)
 
     # RM dataset
@@ -64,6 +65,7 @@ if __name__ == '__main__':
     # rm_df[['r_code', 'r_cleaned_answer', 'r_refer']] = rm_df['code'].apply(search_random_answer)
     rm_df[['r_code', 'r_cleaned_answer', 'r_refer']] = rm_df.apply(lambda row: search_random_answer(row['code'], rm_df), axis=1)
     rm_df.to_csv('../RL/data/RM/RM_dataset.csv', index=False)
+    print(f'RM 데이터셋 길이 : {len(rm_df)}')
 
 
 
