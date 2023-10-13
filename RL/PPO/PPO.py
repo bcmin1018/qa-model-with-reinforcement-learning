@@ -98,6 +98,7 @@ def train(args):
     tokenizer = load_tokenizer(args)
     dataset = load_data(args)
     current_device = Accelerator().local_process_index
+
     lora_config = LoraConfig(
         r=16,
         lora_alpha=32,
@@ -149,8 +150,8 @@ def train(args):
         device = 0 if torch.cuda.is_available() else "cpu"  # to avoid a `pipeline` bug
     else:
         device = ppo_trainer.accelerator.device
-
-    reward_model = pipeline("text-classification", "bradmin/reward", device=device)
+    reward_tokenizer = AutoTokenizer.from_pretrained('klue/roberta-base')
+    reward_model = pipeline("text-classification", "bradmin/reward", tokenizer=reward_tokenizer, device=device)
     generation_kwargs = dict(
         eos_token_id=tokenizer.eos_token_id,
         pad_token_id=tokenizer.eos_token_id,
@@ -173,32 +174,13 @@ def train(args):
             response_tensors.append(response.squeeze())
         batch["response"] = tokenizer.batch_decode(response_tensors, skip_special_tokens=True)
         texts = [q + r for q, r in zip(batch["query"], batch["response"])]
-        # batch['response'] = [tokenizer.decode(torch.cat([query.squeeze(), response.squeeze()]), skip_special_tokens=True)
-        #                      for query, response in zip(query_tensors, response_tensors)]
-        # pipe_outputs = reward_model(batch['response'], padding=True, truncation=True, max_length=512)
         pipe_outputs = reward_model(texts, padding=True, truncation=True, max_length=512)
-        # try:
-        #     for i, response in enumerate(batch['response']):
-        #         r = response.split('Response(응답):')[1]
-        #         print(f'응답{i + 1}: {r}\n')
-        # except IndexError:
-        #     print(f'오류 발생 prompt: {i}  {r}')
-        # print(rewards)
-
         rewards = [torch.tensor(output["score"] - args.reward_baseline) for output in pipe_outputs]
         stats = ppo_trainer.step(query_tensors, response_tensors, rewards)
         ppo_trainer.log_stats(stats, batch, rewards)
 
         if args.save_freq and epoch and epoch % args.save_freq == 0:
-            # active_model.save_pretrained(args.output_dir + f"/step_{epoch}")
             ppo_trainer.save_pretrained(args.output_dir + f"/step_{epoch}")
-            # ppo_trainer.push_to_hub(
-            #     'bradmin/ppo_adapter',
-            #     token=access_token
-                # use_temp_dir=True,
-                # use_auth_token=access_token
-            # )
-
 
 def inference(args):
     tokenizer = transformers.AutoTokenizer.from_pretrained(

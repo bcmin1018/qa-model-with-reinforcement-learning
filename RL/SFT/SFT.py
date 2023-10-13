@@ -18,7 +18,8 @@ from typing import Optional, Dict, Sequence
 from dataclasses import dataclass
 from torch.utils.data import Dataset
 from datasets import load_metric
-# from evaluate import load
+import bert_score
+from evaluate import load
 from trl import SFTTrainer
 
 metric = load_metric("accuracy")
@@ -49,8 +50,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--mode', type=str, choices=['train', 'inference'])
     parser.add_argument('--train_path', type=str, default='./SFT_train.json')
-    parser.add_argument('--test_path', type=str, default=True)
-    parser.add_argument('--reward_data_path', type=str, default=True)
+    parser.add_argument('--test_path', type=str, default='./test.csv')
+    parser.add_argument('--inference_model', type=str, default='EleutherAI/polyglot-ko-1.3b')
     parser.add_argument('--model_name', type=str, choices=['gpt2', 'gpt3'])
     parser.add_argument('--learning_rate', type=float, default=2e-5)
     parser.add_argument('--weight_decay', type=float, default=0)
@@ -328,17 +329,19 @@ def train(args):
     safe_save_model_for_hf_trainer(trainer=trainer, output_dir=args.output_dir)
     print(f'model save end')
 
+def generate_anwer(question):
+    list_prompt = [PROMPT_DICT['prompt_no_input'].format_map({'prompt': question})]
+
+
 def inference(args):
-    # tokenizer = fn_tokenizer(args)
     tokenizer = transformers.AutoTokenizer.from_pretrained(
         args.model_name,
         model_max_length=1024,
     )
-    df = pd.read_csv(args.reward_data_path)
+    df = pd.read_csv(args.test_path)
     prompts = df['cleaned_question'].to_list()
     list_prompt = [PROMPT_DICT['prompt_no_input'].format_map({'prompt': prompt}) for prompt in prompts]
-
-    generator = pipeline('text-generation', model='bradmin/ployglot1.3', tokenizer=tokenizer, device=0)
+    generator = pipeline('text-generation', model=args.inference_model, tokenizer=tokenizer, device=0)
     generation_kwargs = dict(
         repetition_penalty=2.0,
         no_repeat_ngram_size=3,
@@ -350,17 +353,17 @@ def inference(args):
         top_k=0,
         top_p=1.0
     )
-    sft_answer = []
+    answer = []
     for i, instruction in enumerate(tqdm(list_prompt)):
         result = generator([instruction], **generation_kwargs)
-        response = result[0][0]['generated_text'].split('Response(응답):')[1]
+        response = result[0][0]['generated_text'].split('###Answer: ')[1]
         print(f'{i} , {response}')
-        sft_answer.append(response)
+        answer.append(response)
 
-    df['sft_answer'] = sft_answer
-    bertscore = load('bertscore')
-    bert_score_sft = bert_score.score(df['sft_answer'].astype(str).to_list(),
-                                      df['completion'].to_list(),
+    df[f'{args.inference_model}_answer'] = answer
+    # bertscore = load('bertscore')
+    bert_score_sft = bert_score.score(df[f'{args.inference_model}_answer'].astype(str).to_list(),
+                                      df['cleaned_answer'].to_list(),
                                       batch_size=32,
                                       rescale_with_baseline=False,
                                       # lang='others',
@@ -368,22 +371,9 @@ def inference(args):
                                       idf=True,
                                       verbose=True,
                                       device=0)
-    df['bert_score_sft_P'] = bert_score_sft[0]
-    df['bert_score_sft_R'] = bert_score_sft[1]
-    df['bert_score_sft_F1'] = bert_score_sft[2]
-
-    bert_score_chatgpt = bert_score.score(df['chatgpt_answer'].astype(str).to_list(),
-                                      df['completion'].to_list(),
-                                      batch_size=32,
-                                      rescale_with_baseline=False,
-                                      # lang='others',
-                                      model_type='roberta-large',
-                                      idf=True,
-                                      verbose=True,
-                                      device=0)
-    df['bert_score_chatgpt_P'] = bert_score_chatgpt[0]
-    df['bert_score_chatgpt_R'] = bert_score_chatgpt[1]
-    df['bert_score_chatgpt_F1'] = bert_score_chatgpt[2]
+    df[f'{args.inference_model}_bert_score_P'] = bert_score_sft[0]
+    df[f'{args.inference_model}_bert_score_R'] = bert_score_sft[1]
+    df[f'{args.inference_model}_bert_score_F1'] = bert_score_sft[2]
 
     df.to_csv(os.path.join(args.output_dir, 'result.csv'), index=False)
 
