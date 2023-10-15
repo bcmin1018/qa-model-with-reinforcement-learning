@@ -10,14 +10,11 @@ import os
 from trl import AutoModelForCausalLMWithValueHead, create_reference_model
 from trl import PPOTrainer
 from trl import PPOConfig
-from trl.core import LengthSampler
 from tqdm import tqdm
 import os
 import wandb
-# from random import choices
 import transformers
 import torch
-# import numpy as np
 
 os.environ["WANDB_API_KEY"] = "8175d3b6ac05eaa98cbcbbd69dcbc55f7b4f0a6e"
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -44,6 +41,7 @@ def main():
     parser.add_argument('--output_max_length', type=int, default=200)
     parser.add_argument('--kl_penalty', type=str, default="kl")
     parser.add_argument('--reward_baseline', type=float, default=0.0)
+    parser.add_argument('--tracker_project_name', type=str, default='ppo')
 
     args = parser.parse_args()
     args.log_dir = os.path.join(args.output_dir, "logs")
@@ -111,6 +109,7 @@ def train(args):
         load_in_8bit=True,
         device_map={"": current_device},
         peft_config=lora_config,
+        use_cache=False
     )
     ref_model = create_reference_model(active_model)
     config = PPOConfig(
@@ -128,7 +127,8 @@ def train(args):
         adap_kl_ctrl=args.adap_kl_ctrl,
         init_kl_coef=args.init_kl_coef,
         remove_unused_columns=False,
-        kl_penalty=args.kl_penalty
+        kl_penalty=args.kl_penalty,
+        tracker_project_name=args.tracker_project_name
     )
 
 
@@ -159,7 +159,7 @@ def train(args):
         max_length=512,
         do_sample=True,
         top_k=0.0,
-        top_p=1.0, # 상위 20% 토큰만 사용해서 고려
+        top_p=1.0,
         min_length=-1
     )
 
