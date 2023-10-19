@@ -7,7 +7,7 @@ import transformers
 import copy
 import logging
 import torch
-from peft import LoraConfig, prepare_model_for_int8_training
+from peft import LoraConfig, prepare_model_for_int8_training, get_peft_model
 from tqdm import tqdm
 import os
 from sklearn.model_selection import train_test_split
@@ -17,10 +17,11 @@ from transformers import Trainer, TrainingArguments
 from typing import Optional, Dict, Sequence
 from dataclasses import dataclass
 from torch.utils.data import Dataset
-from datasets import load_metric
+from datasets import load_metric, load_dataset
 import bert_score
-from evaluate import load
-from trl import SFTTrainer
+from trl import SFTTrainer, DataCollatorForCompletionOnlyLM
+# import os
+# os.environ["WANDB_API_KEY"] = "8175d3b6ac05eaa98cbcbbd69dcbc55f7b4f0a6e"
 
 metric = load_metric("accuracy")
 IGNORE_INDEX = -100
@@ -54,7 +55,7 @@ def main():
     parser.add_argument('--inference_model', type=str, default='EleutherAI/polyglot-ko-1.3b')
     parser.add_argument('--model_name', type=str, choices=['gpt2', 'gpt3'])
     parser.add_argument('--learning_rate', type=float, default=2e-5)
-    parser.add_argument('--weight_decay', type=float, default=0)
+    parser.add_argument('--weight_decay', type=float, default=0.05)
     parser.add_argument('--max_grad_norm', type=float, default=1.0)
     parser.add_argument('--num_train_epochs', type=int, default=1)
     parser.add_argument('--per_device_train_batch_size', type=int, default=4)
@@ -275,8 +276,10 @@ def train(args):
             args.model_name,
             load_in_8bit=True,
             device_map={"": Accelerator().process_index},
-            use_cache=False
+            use_cache=False,
+            # torch_dtype=torch.float16,
         )
+        model = get_peft_model(model, lora_config)
         model = prepare_model_for_int8_training(model)
 
     elif args.model_name == 'skt/kogpt2-base-v2':
@@ -289,6 +292,8 @@ def train(args):
     train_dataset = SFT_dataset(train_data, tokenizer=tokenizer)
     eval_dataset = SFT_dataset(eval_data, tokenizer=tokenizer)
     data_collator = DataCollatorForSupervisedDataset(tokenizer=tokenizer)
+
+    # train_dataset, valid_dataset = create_datasets(tokenizer, args)
 
     training_args = TrainingArguments(
         output_dir=args.output_dir,
@@ -308,31 +313,31 @@ def train(args):
         save_strategy='steps',
         evaluation_strategy='steps',
         lr_scheduler_type=args.lr_scheduler_type,
-        fp16=True,
+        # fp16=True,
+        # report_to="none",
         adam_beta2=0.95,
         seed=2023
     )
 
-    trainer = SFTTrainer(
+    trainer = Trainer(
         model=model,
         args=training_args,
+        data_collator=data_collator,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
-        peft_config=lora_config,
-        data_collator=data_collator,
-        compute_metrics=compute_metrics,
+        compute_metrics=compute_metrics
     )
 
     trainer.train()
     trainer.save_model()
-
     print(f'model save start')
     safe_save_model_for_hf_trainer(trainer=trainer, output_dir=args.output_dir)
     print(f'model save end')
 
 # def generate_anwer(question):
 #     list_prompt = [PROMPT_DICT['prompt_no_input'].format_map({'prompt': question})]
-#
+
+
 
 def inference(args):
     tokenizer = transformers.AutoTokenizer.from_pretrained(

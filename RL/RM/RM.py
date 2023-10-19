@@ -4,6 +4,8 @@ import evaluate
 import numpy as np
 import torch.nn as nn
 from datasets import load_dataset
+from accelerate import Accelerator
+from peft import LoraConfig, TaskType, get_peft_model
 from transformers import (
     AutoModelForSequenceClassification,
     AutoTokenizer,
@@ -13,8 +15,10 @@ from transformers import (
     TrainingArguments,
 )
 from transformers.utils import PaddingStrategy
+import torch
+
 from trl import RewardTrainer
-# import os
+import os
 # os.environ["WANDB_API_KEY"] = "8175d3b6ac05eaa98cbcbbd69dcbc55f7b4f0a6e"
 
 # Define and parse arguments.
@@ -67,15 +71,34 @@ class ScriptArguments:
     output_dir: Optional[str] = field(
         default="/app/outputs",
     )
-    logging_steps: Optional[int] = field(default=10)
+    logging_steps: Optional[int] = field(default=100)
+    eval_steps: Optional[int] = field(default=100)
+    save_steps: Optional[int] = field(default=100)
 
 parser = HfArgumentParser(ScriptArguments)
 script_args = parser.parse_args_into_dataclasses()[0]
 print(f'{script_args}')
 
 tokenizer_name = script_args.tokenizer_name if script_args.tokenizer_name is not None else script_args.model_name
-tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+tokenizer = AutoTokenizer.from_pretrained(
+    tokenizer_name,
+    model_max_length=1024,
+)
+# DEFAULT_PAD_TOKEN = "<pad>"
+# DEFAULT_EOS_TOKEN = "</s>"
+# DEFAULT_BOS_TOKEN = "</s>"
+# DEFAULT_UNK_TOKEN = "</s>"
+# tokenizer = AutoTokenizer.from_pretrained(
+#     tokenizer_name,
+#     bos_token=DEFAULT_BOS_TOKEN,
+#     eos_token=DEFAULT_EOS_TOKEN,
+#     unk_token=DEFAULT_UNK_TOKEN,
+#     pad_token=DEFAULT_PAD_TOKEN,
+#     padding_side="right",
+#     model_max_length=1024
+# )
 
+accuracy = evaluate.load("accuracy")
 
 def preprocess_function(examples):
     new_examples = {
@@ -185,22 +208,39 @@ training_args = TrainingArguments(
     weight_decay=script_args.weight_decay,
     evaluation_strategy="steps",
     save_strategy="steps",
+    logging_strategy="steps",
+    eval_steps=script_args.eval_steps,
+    save_steps=script_args.save_steps,
+    logging_steps=script_args.logging_steps,
     gradient_accumulation_steps=script_args.gradient_accumulation_steps,
     remove_unused_columns=False,
     label_names=[],
-    # bf16=script_args.bf16,
-    logging_strategy="steps",
-    logging_steps=script_args.logging_steps,
+    bf16=script_args.bf16,
     optim=script_args.optim,
     lr_scheduler_type=script_args.lr_scheduler_type,
+    report_to="none",
+    adam_beta2=0.95,
+    seed=2023
+)
+
+peft_config = LoraConfig(
+    task_type=TaskType.SEQ_CLS,
+    inference_mode=False,
+    r=8,
+    lora_alpha=32,
+    lora_dropout=0.1,
 )
 
 model = AutoModelForSequenceClassification.from_pretrained(
     script_args.model_name,
-    num_labels=script_args.num_labels,
+    torch_dtype=torch.float16,
+    device_map={"": Accelerator().process_index},
+    num_labels=1,
 )
+model.config.pad_token_id = tokenizer.eos_token_id
 
-accuracy = evaluate.load("accuracy")
+model = get_peft_model(model, peft_config)
+model.print_trainable_parameters()
 
 trainer = RewardTrainer(
     model=model,
