@@ -60,7 +60,7 @@ def main():
     parser.add_argument('--per_device_train_batch_size', type=int, default=4)
     parser.add_argument('--per_device_eval_batch_size', type=int, default=4)
     parser.add_argument('--warmup_steps', type=int, default=1000)
-    parser.add_argument('--warmup_ratio', type=float, default=0.5)
+    parser.add_argument('--warmup_ratio', type=float, default=0.0)
     parser.add_argument('--save_steps', type=int, default=1000)
     parser.add_argument('--eval_steps', type=int, default=100)
     parser.add_argument('--logging_steps', type=int, default=100)
@@ -308,6 +308,8 @@ def train(args):
         save_strategy='steps',
         evaluation_strategy='steps',
         lr_scheduler_type=args.lr_scheduler_type,
+        fp16=True,
+        adam_beta2=0.95,
         seed=2023
     )
 
@@ -319,7 +321,6 @@ def train(args):
         peft_config=lora_config,
         data_collator=data_collator,
         compute_metrics=compute_metrics,
-        packing=True,
     )
 
     trainer.train()
@@ -329,9 +330,9 @@ def train(args):
     safe_save_model_for_hf_trainer(trainer=trainer, output_dir=args.output_dir)
     print(f'model save end')
 
-def generate_anwer(question):
-    list_prompt = [PROMPT_DICT['prompt_no_input'].format_map({'prompt': question})]
-
+# def generate_anwer(question):
+#     list_prompt = [PROMPT_DICT['prompt_no_input'].format_map({'prompt': question})]
+#
 
 def inference(args):
     tokenizer = transformers.AutoTokenizer.from_pretrained(
