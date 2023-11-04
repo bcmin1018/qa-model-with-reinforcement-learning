@@ -1,19 +1,17 @@
-from evaluate import load
-import bert_score
+# from evaluate import load
+# import bert_score
 from accelerate import Accelerator
 from datasets import load_dataset
 from peft import LoraConfig
 from transformers import pipeline, AutoTokenizer
 import argparse
-import pandas as pd
-import os
+# import pandas as pd
 from trl import AutoModelForCausalLMWithValueHead, create_reference_model
 from trl import PPOTrainer
 from trl import PPOConfig
 from tqdm import tqdm
 import os
-import wandb
-import transformers
+# import transformers
 import torch
 
 os.environ["WANDB_API_KEY"] = "8175d3b6ac05eaa98cbcbbd69dcbc55f7b4f0a6e"
@@ -21,10 +19,14 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 access_token="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"
 
 tokenizer = None
-
+DEFAULT_PAD_TOKEN = "<|pad|>"
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--mode', type=str, choices=['train', 'inference'])
+    parser.add_argument('--model_name', type=str, default='bradmin/sft_trl')
+    parser.add_argument('--reward_model_name', type=str)
+    parser.add_argument('--reward_tokenizer', type=str)
+    parser.add_argument('--tokenizer', type=str)
     parser.add_argument('--train_path', type=str, default=True)
     parser.add_argument('--batch_size', type=int, default=1)
     parser.add_argument('--mini_batch_size', type=int, default=1)
@@ -42,6 +44,8 @@ def main():
     parser.add_argument('--kl_penalty', type=str, default="kl")
     parser.add_argument('--reward_baseline', type=float, default=0.0)
     parser.add_argument('--tracker_project_name', type=str, default='ppo')
+    # parser.add_argument('--use_score_scaling', type=bool, default=False)
+    # parser.add_argument('--use_score_norm', type=bool, default=False)
 
     args = parser.parse_args()
     args.log_dir = os.path.join(args.output_dir, "logs")
@@ -51,13 +55,14 @@ def main():
         train(args)
     else:
         print(f'inference mode')
-        inference(args)
+        # inference(args)
 
 def load_tokenizer(args):
     global tokenizer
     tokenizer = AutoTokenizer.from_pretrained(
-        'EleutherAI/polyglot-ko-1.3b',
-        model_max_length=1024,
+        args.tokenizer,
+        model_max_length=512,
+        pad_token=DEFAULT_PAD_TOKEN
     )
     return tokenizer
 
@@ -67,7 +72,7 @@ def preprocess_function(examples):
         "input_ids": [],
     }
     for question in examples['cleaned_question']:
-        query = f"### Question: {question}\n\n### Answer: "
+        query = f"###Question: {question}\n\n###Answer: "
         tokenized_question = tokenizer(query, truncation=True)
         new_examples["query"].append(query)
         new_examples["input_ids"].append(tokenized_question["input_ids"])
@@ -105,35 +110,37 @@ def train(args):
         task_type="CAUSAL_LM",
     )
     active_model = AutoModelForCausalLMWithValueHead.from_pretrained(
-        'bradmin/sft',
+        args.model_name,
         load_in_8bit=True,
         device_map={"": current_device},
+        use_cache=False,
         peft_config=lora_config,
-        use_cache=False
     )
     ref_model = create_reference_model(active_model)
     config = PPOConfig(
         learning_rate=args.learning_rate,
         batch_size=args.batch_size,
+        mini_batch_size=args.mini_batch_size,
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         ppo_epochs=args.ppo_epochs,
         early_stopping=args.early_stopping,
         log_with='wandb',
-        # tracker_project_name=""
-        # log_with='tensorboard',
-        # project_kwargs={"logging_dir": args.log_dir},
         target_kl=args.target_kl,
         seed=2023,
         adap_kl_ctrl=args.adap_kl_ctrl,
         init_kl_coef=args.init_kl_coef,
         remove_unused_columns=False,
         kl_penalty=args.kl_penalty,
-        tracker_project_name=args.tracker_project_name
+        tracker_project_name=args.tracker_project_name,
+        # use_score_scaling=args.use_score_scaling,
+        # use_score_norm=args.use_score_norm
+        use_score_scaling=True,
+        use_score_norm=True,
+        score_clip=0.6,
     )
 
-
     # optimizer = torch.optim.SGD(active_model.parameters(), lr=config.learning_rate)
-    # lr_scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.998)
+    # lr_scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.992)
 
     ppo_trainer = PPOTrainer(
         config,
@@ -150,17 +157,17 @@ def train(args):
         device = 0 if torch.cuda.is_available() else "cpu"  # to avoid a `pipeline` bug
     else:
         device = ppo_trainer.accelerator.device
-    reward_tokenizer = AutoTokenizer.from_pretrained('klue/roberta-base')
-    reward_model = pipeline("text-classification", "bradmin/reward", tokenizer=reward_tokenizer, device=device)
+    reward_tokenizer = AutoTokenizer.from_pretrained(args.reward_tokenizer)
+    reward_model = pipeline("text-classification", args.reward_model_name, tokenizer=reward_tokenizer, device=device, return_token_type_ids=False)
     generation_kwargs = dict(
         eos_token_id=tokenizer.eos_token_id,
-        pad_token_id=tokenizer.eos_token_id,
+        pad_token_id=tokenizer.pad_token_id,
         # min_length=200,
         max_length=512,
         do_sample=True,
         top_k=0.0,
         top_p=1.0,
-        min_length=-1
+        min_length=50
     )
 
     for epoch, batch in tqdm(enumerate(ppo_trainer.dataloader)):
@@ -173,7 +180,8 @@ def train(args):
                                             )
             response_tensors.append(response.squeeze())
         batch["response"] = tokenizer.batch_decode(response_tensors, skip_special_tokens=True)
-        texts = [q + r for q, r in zip(batch["query"], batch["response"])]
+        # response 앞에 띄어 쓰기가 있어 strip 추가
+        texts = [q.strip() + " " + r.strip() for q, r in zip(batch["query"], batch["response"])]
         pipe_outputs = reward_model(texts, padding=True, truncation=True, max_length=512)
         rewards = [torch.tensor(output["score"] - args.reward_baseline) for output in pipe_outputs]
         stats = ppo_trainer.step(query_tensors, response_tensors, rewards)
@@ -182,47 +190,47 @@ def train(args):
         if args.save_freq and epoch and epoch % args.save_freq == 0:
             ppo_trainer.save_pretrained(args.output_dir + f"/step_{epoch}")
 
-def inference(args):
-    tokenizer = transformers.AutoTokenizer.from_pretrained(
-        'EleutherAI/polyglot-ko-1.3b',
-        model_max_length=1024,
-    )
-    df = pd.read_csv(args.train_path)
-    prompts = df['prompt'].to_list()
-    list_prompt = [PROMPT_DICT['prompt_no_input'].format_map({'prompt': prompt}) for prompt in prompts]
-    generator = pipeline('text-generation', model="bradmin/ppo_model", tokenizer=tokenizer, device=0)
-    generation_kwargs = dict(
-        pad_token_id=tokenizer.eos_token_id,
-        eos_token_id=tokenizer.eos_token_id,
-        min_length=-1,
-        max_length=512,
-        do_sample=True,
-        top_k=0.0,
-        top_p=1.0
-    )
-    ppo_answer = []
-    for i, instruction in enumerate(tqdm(list_prompt)):
-        result = generator([instruction], **generation_kwargs)
-        response = result[0][0]['generated_text'].split('Response(응답):')[1]
-        print(f'{i} , {response}')
-        ppo_answer.append(response)
-
-    df['ppo_answer'] = ppo_answer
-    bertscore = load('bertscore')
-    bert_score_sft = bert_score.score(df['ppo_answer'].astype(str).to_list(),
-                                      df['completion'].to_list(),
-                                      batch_size=32,
-                                      rescale_with_baseline=False,
-                                      # lang='others',
-                                      model_type='roberta-large',
-                                      idf=True,
-                                      verbose=True,
-                                      device=0)
-    df['bert_score_ppo_P'] = bert_score_sft[0]
-    df['bert_score_ppo_R'] = bert_score_sft[1]
-    df['bert_score_ppo_F1'] = bert_score_sft[2]
-
-    df.to_csv(os.path.join(args.output_dir, 'result.csv'), index=False)
+# def inference(args):
+#     tokenizer = transformers.AutoTokenizer.from_pretrained(
+#         'EleutherAI/polyglot-ko-1.3b',
+#         model_max_length=1024,
+#     )
+#     df = pd.read_csv(args.train_path)
+#     prompts = df['prompt'].to_list()
+#     list_prompt = [PROMPT_DICT['prompt_no_input'].format_map({'prompt': prompt}) for prompt in prompts]
+#     generator = pipeline('text-generation', model="bradmin/ppo_model", tokenizer=tokenizer, device=0)
+#     generation_kwargs = dict(
+#         pad_token_id=tokenizer.eos_token_id,
+#         eos_token_id=tokenizer.eos_token_id,
+#         min_length=-1,
+#         max_length=512,
+#         do_sample=True,
+#         top_k=0.0,
+#         top_p=1.0
+#     )
+#     ppo_answer = []
+#     for i, instruction in enumerate(tqdm(list_prompt)):
+#         result = generator([instruction], **generation_kwargs)
+#         response = result[0][0]['generated_text'].split('Response(응답):')[1]
+#         print(f'{i} , {response}')
+#         ppo_answer.append(response)
+#
+#     df['ppo_answer'] = ppo_answer
+#     bertscore = load('bertscore')
+#     bert_score_sft = bert_score.score(df['ppo_answer'].astype(str).to_list(),
+#                                       df['completion'].to_list(),
+#                                       batch_size=32,
+#                                       rescale_with_baseline=False,
+#                                       # lang='others',
+#                                       model_type='roberta-large',
+#                                       idf=True,
+#                                       verbose=True,
+#                                       device=0)
+#     df['bert_score_ppo_P'] = bert_score_sft[0]
+#     df['bert_score_ppo_R'] = bert_score_sft[1]
+#     df['bert_score_ppo_F1'] = bert_score_sft[2]
+#
+#     df.to_csv(os.path.join(args.output_dir, 'result.csv'), index=False)
 
 if __name__ == '__main__':
     main()
