@@ -17,3 +17,7 @@ python RM.py --model_name=klue/roberta-large --tokenizer_name=klue/roberta-large
 ```
 python PPO.py --mode train --train_path {TRAIN_PATH} --batch_size 64 --save_freq 50 --learning_rate 9e-7 --ppo_epochs 5 --mini_batch_size 16 --gradient_accumulation_steps 4 --adap_kl_ctrl true --early_stopping True --tracker_project_name ppo --model_name {SFT_PATH} --reward_model_name {RM_PATH} --tokenizer EleutherAI/polyglot-ko-1.3b --reward_tokenizer EleutherAI/polyglot-ko-1.3b --kl_penalty full --score_clip 0.6
 ```
+
+## 모델 학습 구조
+![image](https://github.com/bcmin1018/qa-model-with-reinforcement-learning/assets/101251439/36cf4bf2-c278-4d4d-b7ea-6e363d240245)
+
