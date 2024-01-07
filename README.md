@@ -8,5 +8,11 @@ python SFT_trl.py --mode train --train_path {TRAIN_PATH} --num_train_epochs 20 -
 ```
 
 2. Reward modeling(RM) using QA data pairs with 1.SFT model
+```
+python RM.py --model_name=klue/roberta-large --tokenizer_name=klue/roberta-large --per_device_train_batch_size=6 --per_device_eval_batch_size=6 --num_labels=1 --train_path={TRAIN_PATH} --learning_rate=9e-5 --lr_scheduler_type=cosine --gradient_accumulation_steps=10 --logging_steps=10 --eval_steps 100 --save_steps 100 --num_train_epochs=1
+```
 
-3. 
+3. RL fine-tuning with 1.SFT Model and 2.RM Model
+```
+python PPO.py --mode train --train_path {TRAIN_PATH} --batch_size 64 --save_freq 50 --learning_rate 9e-7 --ppo_epochs 5 --mini_batch_size 16 --gradient_accumulation_steps 4 --adap_kl_ctrl true --early_stopping True --tracker_project_name ppo --model_name {SFT_PATH} --reward_model_name {RM_PATH} --tokenizer EleutherAI/polyglot-ko-1.3b --reward_tokenizer EleutherAI/polyglot-ko-1.3b --kl_penalty full --score_clip 0.6
+```
