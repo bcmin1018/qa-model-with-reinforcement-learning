@@ -1,7 +1,0 @@
-{
-  "username": "chatbot",
-  "password": "chatbot",
-  "host": "54.180.9.189",
-  "port": "27017",
-  "database": "healthcare_chatbot"
-}
