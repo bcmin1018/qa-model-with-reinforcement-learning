@@ -1,33 +1,20 @@
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Union
+from typing import Optional
 import evaluate
 import numpy as np
-import torch.nn as nn
 from datasets import load_dataset
-from accelerate import Accelerator
-from peft import LoraConfig, TaskType, get_peft_model
 from transformers import (
     AutoModelForSequenceClassification,
     AutoTokenizer,
     HfArgumentParser,
-    PreTrainedTokenizerBase,
-    Trainer,
     TrainingArguments,
 )
-from transformers.utils import PaddingStrategy
-import torch
-
 from trl import RewardTrainer
-import os
-# os.environ["WANDB_API_KEY"] = "8175d3b6ac05eaa98cbcbbd69dcbc55f7b4f0a6e"
 
-# Define and parse arguments.
+DEFAULT_PAD_TOKEN = "<|pad|>"
+
 @dataclass
 class ScriptArguments:
-    """
-    These arguments vary depending on how many GPUs you have, what their capacity and features are, and what size model you want to train.
-    """
-
     per_device_train_batch_size: Optional[int] = field(default=4)
     per_device_eval_batch_size: Optional[int] = field(default=1)
     gradient_accumulation_steps: Optional[int] = field(default=1)
@@ -59,6 +46,9 @@ class ScriptArguments:
         default=1,
         metadata={"help": "The number of training epochs for the reward model."},
     )
+    max_steps: Optional[int] = field(
+        default=-1,
+    )
     optim: Optional[str] = field(
         default="adamw_hf",
         metadata={"help": "The optimizer to use."},
@@ -74,47 +64,53 @@ class ScriptArguments:
     logging_steps: Optional[int] = field(default=100)
     eval_steps: Optional[int] = field(default=100)
     save_steps: Optional[int] = field(default=100)
+    hub_model_id: Optional[str] = field(default="bradmin/reward-gpt")
 
 parser = HfArgumentParser(ScriptArguments)
 script_args = parser.parse_args_into_dataclasses()[0]
 print(f'{script_args}')
+accuracy = evaluate.load("accuracy")
+
+if script_args.model_name == 'gpt3':
+    print(f'gpt3 use start')
+    script_args.model_name = 'EleutherAI/polyglot-ko-1.3b'
+if script_args.model_name == 'gpt2':
+    print(f'gpt2 use start')
+    script_args.model_name = 'skt/kogpt2-base-v2'
 
 tokenizer_name = script_args.tokenizer_name if script_args.tokenizer_name is not None else script_args.model_name
-tokenizer = AutoTokenizer.from_pretrained(
-    tokenizer_name,
-    model_max_length=1024,
-)
-# DEFAULT_PAD_TOKEN = "<pad>"
-# DEFAULT_EOS_TOKEN = "</s>"
-# DEFAULT_BOS_TOKEN = "</s>"
-# DEFAULT_UNK_TOKEN = "</s>"
-# tokenizer = AutoTokenizer.from_pretrained(
-#     tokenizer_name,
-#     bos_token=DEFAULT_BOS_TOKEN,
-#     eos_token=DEFAULT_EOS_TOKEN,
-#     unk_token=DEFAULT_UNK_TOKEN,
-#     pad_token=DEFAULT_PAD_TOKEN,
-#     padding_side="right",
-#     model_max_length=1024
-# )
-
-accuracy = evaluate.load("accuracy")
+if tokenizer_name == 'skt/kogpt2-base-v2':
+    tokenizer = AutoTokenizer.from_pretrained(
+        tokenizer_name,
+        bos_token="<pad>",
+        eos_token="</s>",
+        unk_token="</s>",
+        pad_token="</s>",
+        padding_side="right",
+        model_max_length=script_args.max_length
+    )
+else:
+    tokenizer = AutoTokenizer.from_pretrained(
+        tokenizer_name,
+        model_max_length=script_args.max_length,
+        pad_token=DEFAULT_PAD_TOKEN
+    )
 
 def preprocess_function(examples):
     new_examples = {
-        "input_ids_j": [],
-        "attention_mask_j": [],
-        "input_ids_k": [],
-        "attention_mask_k": [],
+        "input_ids_chosen": [],
+        "attention_mask_chosen": [],
+        "input_ids_rejected": [],
+        "attention_mask_rejected": [],
     }
-    for question, response_j, response_k in zip(examples['cleaned_question'], examples['cleaned_answer'], examples['r_cleaned_answer']):
-        tokenized_j = tokenizer("###Question: " + question + "\n\n###Answer: " + response_j, truncation=True)
-        tokenized_k = tokenizer("###Question: " + question + "\n\n###Answer: " + response_k, truncation=True)
+    for question, response_j, response_k in zip(examples['question'], examples['response_j'], examples['response_k']):
+        tokenized_j = tokenizer("###Question: " + question + "\n\n###Answer: " + response_j + tokenizer.eos_token, truncation=True)
+        tokenized_k = tokenizer("###Question: " + question + "\n\n###Answer: " + response_k + tokenizer.eos_token, truncation=True)
 
-        new_examples["input_ids_j"].append(tokenized_j["input_ids"])
-        new_examples["attention_mask_j"].append(tokenized_j["attention_mask"])
-        new_examples["input_ids_k"].append(tokenized_k["input_ids"])
-        new_examples["attention_mask_k"].append(tokenized_k["attention_mask"])
+        new_examples["input_ids_chosen"].append(tokenized_j["input_ids"])
+        new_examples["attention_mask_chosen"].append(tokenized_j["attention_mask"])
+        new_examples["input_ids_rejected"].append(tokenized_k["input_ids"])
+        new_examples["attention_mask_rejected"].append(tokenized_k["attention_mask"])
 
     return new_examples
 
@@ -124,63 +120,6 @@ def compute_metrics(eval_pred):
     labels = np.zeros(predictions.shape)
     return accuracy.compute(predictions=predictions, references=labels)
 
-class RewardTrainer(Trainer):
-    def compute_loss(self, model, inputs, return_outputs=False):
-        rewards_j = model(input_ids=inputs["input_ids_chosen"], attention_mask=inputs["attention_mask_chosen"])[0]
-        rewards_k = model(input_ids=inputs["input_ids_rejected"], attention_mask=inputs["attention_mask_rejected"])[0]
-        loss = -nn.functional.logsigmoid(rewards_j - rewards_k).mean()
-        if return_outputs:
-            return loss, {"rewards_j": rewards_j, "rewards_k": rewards_k}
-        return loss
-
-@dataclass
-class RewardDataCollatorWithPadding:
-    tokenizer: PreTrainedTokenizerBase
-    padding: Union[bool, str, PaddingStrategy] = True
-    max_length: Optional[int] = None
-    pad_to_multiple_of: Optional[int] = None
-    return_tensors: str = "pt"
-
-    def __call__(self, features: List[Dict[str, Any]]) -> Dict[str, Any]:
-        features_chosen = []
-        features_rejected = []
-        for feature in features:
-            features_chosen.append(
-                {
-                    "input_ids": feature["input_ids_j"],
-                    "attention_mask": feature["attention_mask_j"],
-                }
-            )
-            features_rejected.append(
-                {
-                    "input_ids": feature["input_ids_k"],
-                    "attention_mask": feature["attention_mask_k"],
-                }
-            )
-        batch_chosen = self.tokenizer.pad(
-            features_chosen,
-            padding=self.padding,
-            max_length=self.max_length,
-            pad_to_multiple_of=self.pad_to_multiple_of,
-            return_tensors=self.return_tensors,
-        )
-        batch_rejected = self.tokenizer.pad(
-            features_rejected,
-            padding=self.padding,
-            max_length=self.max_length,
-            pad_to_multiple_of=self.pad_to_multiple_of,
-            return_tensors=self.return_tensors,
-        )
-        batch = {
-            "input_ids_chosen": batch_chosen["input_ids"],
-            "attention_mask_chosen": batch_chosen["attention_mask"],
-            "input_ids_rejected": batch_rejected["input_ids"],
-            "attention_mask_rejected": batch_rejected["attention_mask"],
-            "return_loss": True,
-        }
-        return batch
-
-
 def create_datasets(args):
     dataset = load_dataset(
         'csv',
@@ -189,14 +128,21 @@ def create_datasets(args):
         use_auth_token=True,
         cache_dir='/tmp/cache'
     )
-    dataset = dataset.train_test_split(test_size=0.15, seed=2023)
+    dataset = dataset.train_test_split(test_size=0.1, seed=2023, shuffle=False)
     data_splits = dataset.map(preprocess_function, batched=True)
+
     train_dataset = data_splits["train"]
     valid_dataset = data_splits["test"]
 
     print(f"Size of the train set: {len(train_dataset)}. Size of the validation set: {len(valid_dataset)}")
     return train_dataset, valid_dataset
 
+model = AutoModelForSequenceClassification.from_pretrained(
+    script_args.model_name,
+    num_labels=script_args.num_labels,
+)
+
+model.config.pad_token_id = tokenizer.eos_token_id
 train_dataset, eval_dataset = create_datasets(script_args)
 
 training_args = TrainingArguments(
@@ -205,6 +151,7 @@ training_args = TrainingArguments(
     per_device_train_batch_size=script_args.per_device_train_batch_size,
     per_device_eval_batch_size=script_args.per_device_eval_batch_size,
     num_train_epochs=script_args.num_train_epochs,
+    max_steps=script_args.max_steps,
     weight_decay=script_args.weight_decay,
     evaluation_strategy="steps",
     save_strategy="steps",
@@ -218,37 +165,18 @@ training_args = TrainingArguments(
     bf16=script_args.bf16,
     optim=script_args.optim,
     lr_scheduler_type=script_args.lr_scheduler_type,
-    report_to="none",
     adam_beta2=0.95,
     seed=2023
 )
 
-peft_config = LoraConfig(
-    task_type=TaskType.SEQ_CLS,
-    inference_mode=False,
-    r=8,
-    lora_alpha=32,
-    lora_dropout=0.1,
-)
-
-model = AutoModelForSequenceClassification.from_pretrained(
-    script_args.model_name,
-    torch_dtype=torch.float16,
-    device_map={"": Accelerator().process_index},
-    num_labels=1,
-)
-model.config.pad_token_id = tokenizer.eos_token_id
-
-model = get_peft_model(model, peft_config)
-model.print_trainable_parameters()
-
 trainer = RewardTrainer(
     model=model,
+    tokenizer=tokenizer,
     args=training_args,
     train_dataset=train_dataset,
     eval_dataset=eval_dataset,
     compute_metrics=compute_metrics,
-    data_collator=RewardDataCollatorWithPadding(tokenizer=tokenizer, max_length=script_args.max_length),
+    max_length=script_args.max_length
 )
 
 trainer.train()
