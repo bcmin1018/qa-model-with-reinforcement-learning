@@ -1,5 +1,5 @@
 from datasets import load_dataset
-# import bert_score
+import bert_score
 import argparse
 import numpy as np
 import transformers
@@ -9,29 +9,29 @@ from tqdm import tqdm
 import os
 from accelerate import Accelerator
 from transformers import AutoModelForCausalLM, pipeline, AutoTokenizer
-from transformers import Trainer, TrainingArguments
+from transformers import TrainingArguments
 from datasets import load_metric
-from evaluate import load
 from trl import SFTTrainer, DataCollatorForCompletionOnlyLM
 
 metric = load_metric("accuracy")
-os.environ["WANDB_API_KEY"] = "8175d3b6ac05eaa98cbcbbd69dcbc55f7b4f0a6e"
 tokenizer = None
-DEFAULT_PAD_TOKEN = "<pad>"
+DEFAULT_PAD_TOKEN = "<|pad|>"
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--mode', type=str, choices=['train', 'inference'])
+    parser.add_argument('--mode', type=str, choices=['train', 'inference', 'rm'])
     parser.add_argument('--train_path', type=str, default='./SFT_train.json')
     parser.add_argument('--test_path', type=str, default=True)
-    parser.add_argument('--reward_data_path', type=str, default=True)
-    parser.add_argument('--model_name', type=str, choices=['gpt2', 'gpt3'])
+    parser.add_argument('--rm_train_path', type=str, default='./test.csv')
+    parser.add_argument('--inference_model', type=str, default='EleutherAI/polyglot-ko-1.3b')
+    parser.add_argument('--tokenizer', type=str, default='')
+    parser.add_argument('--model_name', type=str, choices=['gpt2', 'gpt3', 'rm'])
     parser.add_argument('--learning_rate', type=float, default=2e-5)
     parser.add_argument('--weight_decay', type=float, default=0)
     parser.add_argument('--max_grad_norm', type=float, default=1.0)
     parser.add_argument('--num_train_epochs', type=int, default=1)
-    parser.add_argument('--per_device_train_batch_size', type=int, default=4)
-    parser.add_argument('--per_device_eval_batch_size', type=int, default=4)
+    parser.add_argument('--per_device_train_batch_size', type=int, default=2)
+    parser.add_argument('--per_device_eval_batch_size', type=int, default=2)
     parser.add_argument('--warmup_steps', type=int, default=1000)
     parser.add_argument('--warmup_ratio', type=float, default=0.5)
     parser.add_argument('--save_steps', type=int, default=1000)
@@ -42,12 +42,15 @@ def main():
     parser.add_argument('--lr_scheduler_type', type=str, default='linear')
     parser.add_argument("--seed", type=int, default=2023)
     parser.add_argument("--seq_length", type=int, default=1024)
+    parser.add_argument('--hub_model_id', type=str, default='')
+    parser.add_argument('--sft_answer_num', type=int, default=1)
 
     args = parser.parse_args()
 
     if args.model_name == 'gpt3':
         print(f'gpt3 use start')
         args.model_name = 'EleutherAI/polyglot-ko-1.3b'
+
     if args.model_name == 'gpt2':
         print(f'gpt2 use start')
         args.model_name = 'skt/kogpt2-base-v2'
@@ -59,7 +62,8 @@ def main():
         train(args)
     elif args.mode == 'inference':
         inference(args)
-
+    elif args.mode == 'rm':
+        create_rm_data(args)
 
 def compute_metrics(eval_pred):
     logits, labels = eval_pred
@@ -85,7 +89,6 @@ def safe_save_model_for_hf_trainer(trainer: transformers.Trainer, output_dir: st
     """Collects the state dict and dump to disk."""
     state_dict = trainer.model.state_dict()
     if trainer.args.should_save:
-        # cpu_state_dict = {key: value.cpu() for key, value in list(state_dict.items())}
         cpu_state_dict = {key: value for key, value in list(state_dict.items())}
         del state_dict
         trainer._save(output_dir, state_dict=cpu_state_dict)
@@ -93,24 +96,20 @@ def safe_save_model_for_hf_trainer(trainer: transformers.Trainer, output_dir: st
 def formatting_prompts_func(example):
     output_texts = []
     for i in range(len(example['cleaned_question'])):
-        text = f"###Question: {example['cleaned_question'][i]}\n\n###Answer: {example['cleaned_answer'][i]}"
+        text = f"###Question: {example['cleaned_question'][i]}\n\n###Answer: {example['cleaned_answer'][i]}{tokenizer.eos_token}"
         output_texts.append(text)
     return output_texts
+
 def prompt_text(example):
-    text = f"###Question: {example['cleaned_question']}\n\n###Answer: "
+    text = f"###Question: {example}\n\n###Answer: "
     return text
 
 def train(args):
     if args.model_name == 'EleutherAI/polyglot-ko-1.3b':
-        print(f'####### gpt3 selected')
-        print(f'####### load tokenizer')
-        #['<|endoftext|>', '<|sep|>', '<|acc|>', '<|tel|>', '<|rrn|>']
-        #[2, 3, 30000, 30001, 30002]
-        #
         global tokenizer
         tokenizer = AutoTokenizer.from_pretrained(
             args.model_name,
-            model_max_length=1024,
+            model_max_length=args.seq_length,
             pad_token=DEFAULT_PAD_TOKEN
         )
 
@@ -127,11 +126,10 @@ def train(args):
         )
         model = AutoModelForCausalLM.from_pretrained(
             args.model_name,
-            # load_in_8bit=True,
-            # device_map={"": Accelerator().process_index},
-            # use_cache=False
+            load_in_8bit=True,
+            device_map={"": Accelerator().process_index},
+            use_cache=False
         )
-
         model = prepare_model_for_int8_training(model)
 
         response_template = "###Answer:"
@@ -139,7 +137,6 @@ def train(args):
 
     elif args.model_name == 'skt/kogpt2-base-v2':
         print(f'######## gpt2 loaded')
-        # tokenizer = fn_tokenizer(args)
         model = AutoModelForCausalLM.from_pretrained(args.model_name)
 
     print(f'######## model train set')
@@ -150,7 +147,7 @@ def train(args):
         num_train_epochs=args.num_train_epochs,
         per_device_train_batch_size=args.per_device_train_batch_size,
         per_device_eval_batch_size=args.per_device_eval_batch_size,
-        logging_dir=args.log_dir,  # directory for storing logs
+        logging_dir=args.log_dir,
         logging_steps=args.logging_steps,
         eval_steps=args.eval_steps,
         save_steps=args.save_steps,
@@ -161,7 +158,8 @@ def train(args):
         save_strategy='steps',
         evaluation_strategy='steps',
         lr_scheduler_type=args.lr_scheduler_type,
-        seed=args.seed
+        seed=args.seed,
+        adam_beta2=0.95,
     )
 
     print(f'######## set SFTTrainer')
@@ -174,7 +172,7 @@ def train(args):
         data_collator=collator,
         formatting_func=formatting_prompts_func,
         compute_metrics=compute_metrics,
-        max_seq_length=1024,
+        max_seq_length=args.seq_length,
         packing=False
     )
 
@@ -186,22 +184,80 @@ def train(args):
     safe_save_model_for_hf_trainer(trainer=trainer, output_dir=args.output_dir)
     print(f'model save end')
 
+def create_rm_data(args):
+    tokenizer = transformers.AutoTokenizer.from_pretrained(
+        args.tokenizer,
+        model_max_length=args.seq_length,
+        pad_token=DEFAULT_PAD_TOKEN
+    )
+    df = pd.read_csv(args.rm_train_path)
+    list_prompt = df['cleaned_question'].apply(prompt_text)
+    generator = pipeline('text-generation', model=args.inference_model, tokenizer=tokenizer, device=0)
+    generation_kwargs = dict(
+        pad_token_id=tokenizer.pad_token_id,
+        eos_token_id=tokenizer.eos_token_id,
+        do_sample=True,
+        top_k=0,
+        top_p=1.0,
+        min_length=-1,
+        max_new_tokens=200,
+        min_new_tokens=10
+    )
+    if args.sft_answer_num == 1:
+        sft_answer = []
+        for i, instruction in enumerate(tqdm(list_prompt)):
+            result = generator([instruction], **generation_kwargs)
+            response = result[0][0]['generated_text'].split('###Answer: ')[1]
+            print(f'{i} {instruction}{response}')
+            sft_answer.append(response.strip())
+        df[f'sft_answer'] = sft_answer
+        df.to_csv(os.path.join(args.output_dir, 'rm_dataset.csv'), index=False)
+
+    else:
+        sft_columns = [f"sft_{i+1}" for i in range(0, args.sft_answer_num)]
+        data = {}
+        for sft_column in sft_columns:
+            data[sft_column] = []
+
+        for i, instruction in enumerate(tqdm(list_prompt)):
+            for j in range(0, args.sft_answer_num):
+                result = generator([instruction], **generation_kwargs)
+                response = result[0][0]['generated_text'].split('###Answer: ')[1]
+                data[f"sft_{j+1}"].append(response.strip())
+                print(f'{i+1}-{j+1} {instruction}{response}')
+
+        for i in range(0, args.sft_answer_num):
+            df[f'sft_{i+1}'] = data[f'sft_{i+1}']
+
+        df.to_csv(os.path.join(args.output_dir, f'rm_dataset_{args.sft_answer_num}_tmp.csv'), index=False)
+
+        for i in range(0, args.sft_answer_num):
+            bert_score_sft = bert_score.score(df[f'sft_{i+1}'].astype(str).to_list(),
+                                              df['cleaned_answer'].to_list(),
+                                              batch_size=32,
+                                              rescale_with_baseline=False,
+                                              lang='others',
+                                              model_type='roberta-large',
+                                              idf=True,
+                                              verbose=True,
+                                              device=0)
+            df[f'sft_{i+1}_F1'] = bert_score_sft[2]
+
+        df.to_csv(os.path.join(args.output_dir, f'rm_dataset_{args.sft_answer_num}.csv'), index=False)
+
+
 def inference(args):
     tokenizer = transformers.AutoTokenizer.from_pretrained(
         args.model_name,
-        model_max_length=1024,
+        model_max_length=args.seq_length,
     )
-    df = pd.read_csv('C:\\funnywork\\pycharm\\pythonProject\\Doctor-QA-with-RL\\RL\\data\\original\\PPO.csv')
+    df = pd.read_csv('/RL/data/original_200_231126/PPO_200.csv')
     list_prompt = [prompt_text(df.iloc[i]) for i in range(len(df))]
     print(f'{args.model_name} loaded for inference')
-    # generator = pipeline('text-generation', model=args.model_name, tokenizer=tokenizer, device='cpu')
     generator = pipeline('text-generation', model=args.model_name, tokenizer=tokenizer, device=0)
     generation_kwargs = dict(
-        repetition_penalty=2.0,
-        no_repeat_ngram_size=3,
         pad_token_id=tokenizer.pad_token_id,
         eos_token_id=tokenizer.eos_token_id,
-        # min_length=200,
         max_length=512,
         do_sample=True,
         top_k=0,
@@ -210,39 +266,9 @@ def inference(args):
     sft_answer = []
     for i, instruction in enumerate(tqdm(list_prompt)):
         result = generator([instruction], **generation_kwargs)
-        response = result[0][0]['generated_text'].split('Answer:')[1]
+        response = result[0][0]['generated_text'].split('Answer: ')[1]
         print(f'{i} , {response}')
         sft_answer.append(response)
-
-#     df['sft_answer'] = sft_answer
-#     bertscore = load('bertscore')
-#     bert_score_sft = bert_score.score(df['sft_answer'].astype(str).to_list(),
-#                                       df['completion'].to_list(),
-#                                       batch_size=32,
-#                                       rescale_with_baseline=False,
-#                                       # lang='others',
-#                                       model_type='roberta-large',
-#                                       idf=True,
-#                                       verbose=True,
-#                                       device=0)
-#     df['bert_score_sft_P'] = bert_score_sft[0]
-#     df['bert_score_sft_R'] = bert_score_sft[1]
-#     df['bert_score_sft_F1'] = bert_score_sft[2]
-#
-#     bert_score_chatgpt = bert_score.score(df['chatgpt_answer'].astype(str).to_list(),
-#                                       df['completion'].to_list(),
-#                                       batch_size=32,
-#                                       rescale_with_baseline=False,
-#                                       # lang='others',
-#                                       model_type='roberta-large',
-#                                       idf=True,
-#                                       verbose=True,
-#                                       device=0)
-#     df['bert_score_chatgpt_P'] = bert_score_chatgpt[0]
-#     df['bert_score_chatgpt_R'] = bert_score_chatgpt[1]
-#     df['bert_score_chatgpt_F1'] = bert_score_chatgpt[2]
-#
-#     df.to_csv(os.path.join(args.output_dir, 'result.csv'), index=False)
 
 if __name__ == '__main__':
     main()
