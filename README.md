@@ -1,6 +1,7 @@
 ## Application of Reinforcement Learning to Response Generation Model Using Domain Data
 + 크롤링한 데이터를 ChatGPT 방식을 적용하여 학습
 + HumanFeedback 대신 지표를 사용해서 응답을 차등화한 보상 모델 학습
++ 논문 링크 : 
 
 1. Supervised fine-tuning(SFT) of the base EleutherAI/polyglot-ko-1.3b
 ```
