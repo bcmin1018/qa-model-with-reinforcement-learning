@@ -21,3 +21,7 @@ python PPO.py --mode train --train_path {TRAIN_PATH} --batch_size 64 --save_freq
 ## 모델 학습 구조
 ![RL](https://github.com/bcmin1018/qa-model-with-reinforcement-learning/assets/101251439/a47c0162-031e-46cf-8d71-6c8c367d8b8c)
 
+
+## 의료 진찰 Q&A 학습 데이터 수집
+![데이터수집](https://github.com/bcmin1018/qa-model-with-reinforcement-learning/assets/101251439/06310021-551a-461a-a851-c024a629a05d)
+
