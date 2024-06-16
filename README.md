@@ -19,5 +19,5 @@ python PPO.py --mode train --train_path {TRAIN_PATH} --batch_size 64 --save_freq
 ```
 
 ## 모델 학습 구조
-![image](https://github.com/bcmin1018/qa-model-with-reinforcement-learning/assets/101251439/36cf4bf2-c278-4d4d-b7ea-6e363d240245)
+![RL.png](https://prod-files-secure.s3.us-west-2.amazonaws.com/9a008c39-e6ed-407b-b633-4bf35a8e6008/67a5ce89-f2c4-481e-91f6-3c7369028d19/RL.png)
 
